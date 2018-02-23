@@ -36,10 +36,6 @@ type eConn struct {
 	writeBuffer         map[uint32][]byte
 	writeBufMutex       sync.Mutex
 	writeBufCond        sync.Cond
-	readBuffer          [][]byte
-	readBufMutex        sync.Mutex
-	readBufCond         sync.Cond
-	readQueueLength     int
 	maxPacketBodyLength int
 	id                  uint16
 	nextLocalSeq        uint32 // The sequence value used when writing to PCM
@@ -50,16 +46,13 @@ type eConn struct {
 
 // This function should only be invoked by ECM.
 // Create new EConns from ECM.
-func newEConn(conn net.Conn, id uint16, readQueueLength int, maxPacketBodyLength int) *eConn {
+func newEConn(conn net.Conn, id uint16, maxPacketBodyLength int) *eConn {
 	ec := eConn{
 		conn:                conn,
 		writeBuffer:         make(map[uint32][]byte),
-		readBuffer:          make([][]byte, 0),
-		readQueueLength:     readQueueLength,
 		maxPacketBodyLength: maxPacketBodyLength,
 		id:                  id,
 	}
-	ec.readBufCond = sync.Cond{L: &ec.readBufMutex}
 	ec.writeBufCond = sync.Cond{L: &ec.writeBufMutex}
 	return &ec
 }
@@ -74,77 +67,47 @@ func (ec *eConn) write(seq uint32, b []byte) {
 	ec.writeBufMutex.Unlock()
 }
 
-func (ec *eConn) appendToReadBuffer(b []byte) {
-	if ec.dieCtl.isClosedWithType(closeTypeRemote) {
-		return
-	}
-
-	ec.readBufMutex.Lock()
-	defer ec.readBufMutex.Unlock()
-	for len(ec.readBuffer) >= ec.readQueueLength {
-		if ec.dieCtl.isClosedWithType(closeTypeRemote) {
-			return
-		}
-		ec.readBufCond.Wait()
-	}
-	ec.readBuffer = append(ec.readBuffer, b)
-	ec.readBufCond.Signal()
-}
-
 func (ec *eConn) start() {
 	go func() {
 		maxPacketBodyLength := ec.maxPacketBodyLength
+		writeToPCM := ec.eConnManager.core.pConnManager.write
+		checkClosed := func() bool {
+			closed := false
+			withLock(&ec.dieCtl.Mutex, func() {
+				if ec.dieCtl.closed {
+					closed = true
+					if ec.dieCtl.closeType == closeTypeLocal {
+						ec.eConnManager.core.pConnManager.sendFinalizeEConn(ec.id, ec.nextLocalSeq, false)
+					}
+				}
+			})
+			return closed
+		}
+
 		for {
-			if ec.dieCtl.isClosed() { // Handles finalization from remote and local
+			if checkClosed() {
 				return
 			}
 
 			buf := make([]byte, maxPacketBodyLength)
 			n, err := ec.conn.Read(buf)
 			if err != nil {
-				if ec.dieCtl.isClosed() { // Handles finalization from local
+				if checkClosed() { // Handles finalization from local
 					return
 				} else if err == io.EOF {
 					log.Printf("EConn disconnected by peer %s (EConn id: %d)", ec.conn.RemoteAddr(), ec.id)
 					ec.initiateFinalization()
+					ec.eConnManager.core.pConnManager.sendFinalizeEConn(ec.id, ec.nextLocalSeq, false)
 					return
 				} else {
 					log.Printf("error reading from EConn (id: %d); addr: %s, err: %v", ec.id, ec.conn.RemoteAddr(), err)
 					ec.initiateFinalization()
+					ec.eConnManager.core.pConnManager.sendFinalizeEConn(ec.id, ec.nextLocalSeq, false)
 					return
 				}
 			}
 			buf = buf[:n]
-			ec.appendToReadBuffer(buf)
-		}
-	}()
-
-	go func() {
-		writeToPCM := ec.eConnManager.core.pConnManager.write
-		for {
-			if ec.dieCtl.isClosedWithType(closeTypeRemote) { // Handles finalization from remote
-				return
-			}
-
-			ec.readBufMutex.Lock()
-			for len(ec.readBuffer) == 0 {
-				if ec.dieCtl.isClosed() {
-					if ec.dieCtl.isClosedWithType(closeTypeLocal) { // Handles finalization from local
-						ec.eConnManager.core.pConnManager.sendFinalizeEConn(ec.id, ec.nextLocalSeq, false)
-					}
-					ec.readBufMutex.Unlock()
-					return
-				}
-
-				ec.readBufCond.Wait()
-			}
-			b := ec.readBuffer[0]
-			ec.readBuffer[0] = nil
-			ec.readBuffer = ec.readBuffer[1:]
-			ec.readBufCond.Signal()
-			ec.readBufMutex.Unlock()
-
-			writeToPCM(ec.id, ec.nextLocalSeq, b)
+			writeToPCM(ec.id, ec.nextLocalSeq, buf)
 			increaseSeq(&ec.nextLocalSeq)
 		}
 	}()
@@ -171,8 +134,6 @@ func (ec *eConn) start() {
 				if !ok {
 					break
 				}
-				//t := time.Now()
-				//ec.conn.SetWriteDeadline(t.Add(1 * time.Second))
 				_, err := ec.conn.Write(b)
 				if err != nil {
 					if ec.dieCtl.isClosed() { // Handles finalization from local
@@ -206,10 +167,6 @@ func (ec *eConn) initiateFinalization() {
 			ec.writeBufMutex.Lock() // Ensure the following signal is received
 			ec.writeBufCond.Signal()
 			ec.writeBufMutex.Unlock()
-
-			ec.readBufMutex.Lock()
-			ec.readBufCond.Signal()
-			ec.readBufMutex.Unlock()
 		}()
 	})
 
@@ -233,10 +190,6 @@ func (ec *eConn) onReceiveRemoteFinalization(finalSeq uint32, immediate bool) {
 			}
 			ec.writeBufCond.Signal()
 			ec.writeBufMutex.Unlock()
-
-			ec.readBufMutex.Lock()
-			ec.readBufCond.Signal()
-			ec.readBufMutex.Unlock()
 		}()
 	})
 }
@@ -329,7 +282,7 @@ func (ecm *eConnManager) createEConn(conn net.Conn, id uint16) *eConn {
 		id = ecm.getNewId()
 	}
 
-	ec := newEConn(conn, id, ecm.core.config.EConnReadQueueLength, int(ecm.core.config.MaxPacketBodyLength))
+	ec := newEConn(conn, id, int(ecm.core.config.MaxPacketBodyLength))
 	ec.eConnManager = ecm
 
 	ecm.eConnIdMapsMutex.Lock()

@@ -113,7 +113,6 @@ func (dc *dieCtl) closeWithType(t string) {
 
 type Config struct {
 	MaxPacketBodyLength   uint16
-	EConnReadQueueLength  int
 	PConnAuthToken        string
 	PConnBindingAddresses []string
 	PConnKeepAlive        time.Duration
@@ -134,9 +133,6 @@ func NewConfigFromFile(filename string) (*Config, error) {
 	}
 	if config.MaxPacketBodyLength == 0 || config.MaxPacketBodyLength >= 65501 {
 		return nil, errors.New("MaxPacketBodyLength can only be between 0 and 65501 (exclusive)")
-	}
-	if config.EConnReadQueueLength <= 0 {
-		return nil, errors.New("EConnReadQueueLength must be larger than 0")
 	}
 	if config.PConnAuthToken == "" {
 		return nil, errors.New("PConnAuthToken cannot be empty; set it to a random value")
