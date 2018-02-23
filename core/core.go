@@ -112,7 +112,7 @@ func (dc *dieCtl) closeWithType(t string) {
 }
 
 type Config struct {
-	MaxPacketBodyLength   uint16
+	MaxPacketBodyLength   int
 	PConnAuthToken        string
 	PConnBindingAddresses []string
 	PConnKeepAlive        time.Duration

@@ -282,7 +282,7 @@ func (ecm *eConnManager) createEConn(conn net.Conn, id uint16) *eConn {
 		id = ecm.getNewId()
 	}
 
-	ec := newEConn(conn, id, int(ecm.core.config.MaxPacketBodyLength))
+	ec := newEConn(conn, id, ecm.core.config.MaxPacketBodyLength)
 	ec.eConnManager = ecm
 
 	ecm.eConnIdMapsMutex.Lock()
