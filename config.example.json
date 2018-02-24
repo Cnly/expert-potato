@@ -1,5 +1,11 @@
 {
   "MaxPacketBodyLength": 4096,
+  "EConnWriteConfig": {
+    "WriteBufMaxLen": 8192,
+    "WriteBufStopRemoteThreshold": 16,
+    "WriteBufStartRemoteThreshold": 1,
+    "OptimizationMode": false
+  },
   "PConnAuthToken": "",
   "PConnBindingAddresses": [
     "192.168.1.11",

@@ -31,40 +31,98 @@ func increaseSeq(u *uint32) {
 
 // Only create new EConns from ECM
 type eConn struct {
-	eConnManager        *eConnManager
-	conn                net.Conn
-	writeBuffer         map[uint32][]byte
-	writeBufMutex       sync.Mutex
-	writeBufCond        sync.Cond
-	maxPacketBodyLength int
-	id                  uint16
-	nextLocalSeq        uint32 // The sequence value used when writing to PCM
-	nextRemoteSeq       uint32 // Used to keep track of packets received from PCM
-	dieCtl              dieCtl
-	finalSeq            uint32 // The sequence value that indicates end of stream
+	eConnManager                 *eConnManager
+	conn                         net.Conn
+	writeBuffer                  map[uint32][]byte
+	writeBufMutex                sync.Mutex
+	writeBufCond                 sync.Cond
+	writeBufMaxLen               int
+	writeBufStopRemoteThreshold  int // These two threshold are specific length values for the local writeBuffer, but they control whether or not remote EConn's reader should read more data
+	writeBufStartRemoteThreshold int
+	readCtlNextLocalSeq          uint32
+	readCtlNextRemoteSeq         uint32
+	stopReading                  bool
+	readCtlMutex                 sync.Mutex
+	readCtlCond                  sync.Cond
+	maxPacketBodyLength          int
+	id                           uint16
+	nextLocalSeq                 uint32 // The sequence value used when writing to PCM
+	nextRemoteSeq                uint32 // Used to keep track of packets received from PCM
+	dieCtl                       dieCtl
+	finalSeq                     uint32 // The sequence value that indicates end of stream
+
+	optimizationMode bool
 }
 
 // This function should only be invoked by ECM.
 // Create new EConns from ECM.
-func newEConn(conn net.Conn, id uint16, maxPacketBodyLength int) *eConn {
+func newEConn(conn net.Conn, id uint16, config *Config) *eConn {
+	ecwc := config.EConnWriteConfig
 	ec := eConn{
-		conn:                conn,
-		writeBuffer:         make(map[uint32][]byte),
-		maxPacketBodyLength: maxPacketBodyLength,
-		id:                  id,
+		conn:                         conn,
+		writeBuffer:                  make(map[uint32][]byte),
+		maxPacketBodyLength:          config.MaxPacketBodyLength,
+		writeBufMaxLen:               ecwc.WriteBufMaxLen,
+		writeBufStopRemoteThreshold:  ecwc.WriteBufStopRemoteThreshold,
+		writeBufStartRemoteThreshold: ecwc.WriteBufStartRemoteThreshold,
+		id: id,
+
+		optimizationMode: ecwc.OptimizationMode,
 	}
 	ec.writeBufCond = sync.Cond{L: &ec.writeBufMutex}
+	ec.readCtlCond = sync.Cond{L: &ec.readCtlMutex}
 	return &ec
 }
 
+func (ec *eConn) writeCtlPacket(seq uint32, lenValue uint16, body []byte) {
+	if lenValue == lenValueEConnStopRemote || lenValue == lenValueEConnStartRemote {
+		stopReading := false
+		if lenValue == lenValueEConnStopRemote {
+			stopReading = true
+		}
+
+		go withLock(&ec.readCtlMutex, func() {
+			if seq < ec.readCtlNextRemoteSeq {
+				return
+			}
+			ec.readCtlNextRemoteSeq = seq + 1 // TODO: What if this really reaches max?
+			ec.stopReading = stopReading
+			if !stopReading {
+				ec.readCtlCond.Signal()
+			}
+		})
+	} else {
+		log.Printf("EConn received unknown control packet (id: %d, seq: %d, bodyLen: %d, body: %x)", ec.id, seq, lenValue, body)
+		return
+	}
+}
+
 func (ec *eConn) write(seq uint32, b []byte) {
+	ec.writeBufMutex.Lock()
+	defer ec.writeBufMutex.Unlock()
 	if ec.dieCtl.isClosedWithType(closeTypeLocal) {
 		return
 	}
-	ec.writeBufMutex.Lock()
+
+	writeBufLen := len(ec.writeBuffer)
+	if ec.optimizationMode {
+		log.Printf("[Optimization Mode] EConn %d: write buffer len: %d", ec.id, writeBufLen)
+	}
+	if writeBufLen == ec.writeBufMaxLen {
+		log.Printf("EConn %d: write buffer length exceeds allowed max length; finalizing", ec.id)
+		ec.initiateFinalization()
+		ec.eConnManager.core.pConnManager.sendFinalizeEConn(ec.id, ec.nextLocalSeq, true)
+		return
+	}
 	ec.writeBuffer[seq] = b
 	ec.writeBufCond.Signal()
-	ec.writeBufMutex.Unlock()
+
+	writeBufLen++
+	if writeBufLen == ec.writeBufStopRemoteThreshold+1 {
+		readCtlNextLocalSeq := ec.readCtlNextLocalSeq
+		go ec.eConnManager.core.pConnManager.writeRaw(ec.id, readCtlNextLocalSeq, lenValueEConnStopRemote, nil)
+		ec.readCtlNextLocalSeq++ // TODO: What if this really reaches max?
+	}
 }
 
 func (ec *eConn) start() {
@@ -107,6 +165,11 @@ func (ec *eConn) start() {
 				}
 			}
 			buf = buf[:n]
+			withLock(&ec.readCtlMutex, func() {
+				for ec.stopReading {
+					ec.readCtlCond.Wait()
+				}
+			})
 			writeToPCM(ec.id, ec.nextLocalSeq, buf)
 			increaseSeq(&ec.nextLocalSeq)
 		}
@@ -145,6 +208,14 @@ func (ec *eConn) start() {
 				}
 				increaseSeq(&ec.nextRemoteSeq)
 				delete(ec.writeBuffer, seq)
+				writeBufLen := len(ec.writeBuffer)
+				if ec.optimizationMode {
+					log.Printf("[Optimization Mode] EConn %d: write buffer len: %d", ec.id, writeBufLen)
+				}
+				if writeBufLen == ec.writeBufStartRemoteThreshold-1 {
+					go ec.eConnManager.core.pConnManager.writeRaw(ec.id, ec.readCtlNextLocalSeq, lenValueEConnStartRemote, nil)
+					ec.readCtlNextLocalSeq++
+				}
 			}
 		}
 	}()
@@ -225,9 +296,26 @@ func newEConnManager(core *Core) *eConnManager {
 	return &ecm
 }
 
+func (ecm *eConnManager) writeCtlPacket(id uint16, seq uint32, lenValue uint16, body []byte) {
+	if id == 0 {
+		log.Printf("PCM is trying to write control packet to ECM with id 0 (illegal) (seq: %d, lenValue: %d, body: %x); rejecting", seq, lenValue, body)
+		return
+	}
+
+	ecm.eConnIdMapsMutex.Lock()
+	ec, ok := ecm.idEConnMap[id]
+	ecm.eConnIdMapsMutex.Unlock()
+	if !ok {
+		log.Printf("PCM is trying to write control packet to unknown EConn (id: %d); ignoring", id)
+		return
+	}
+
+	ec.writeCtlPacket(seq, lenValue, body)
+}
+
 func (ecm *eConnManager) write(id uint16, seq uint32, b []byte) {
 	if id == 0 {
-		log.Printf("caught attempt to write to ECM with id 0 (illegal); rejecting")
+		log.Printf("PCM is trying to write to ECM with id 0 (illegal); rejecting")
 		return
 	}
 
@@ -258,7 +346,6 @@ func (ecm *eConnManager) write(id uint16, seq uint32, b []byte) {
 			ec.start()
 			log.Printf("created EConn to destination; id: %d", id)
 		}
-
 	}
 	ec.write(seq, b)
 }
@@ -282,7 +369,7 @@ func (ecm *eConnManager) createEConn(conn net.Conn, id uint16) *eConn {
 		id = ecm.getNewId()
 	}
 
-	ec := newEConn(conn, id, ecm.core.config.MaxPacketBodyLength)
+	ec := newEConn(conn, id, ecm.core.config)
 	ec.eConnManager = ecm
 
 	ecm.eConnIdMapsMutex.Lock()

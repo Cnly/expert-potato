@@ -12,6 +12,20 @@ import (
 	"time"
 )
 
+type Position int
+
+const (
+	CLIENT Position = iota
+	SERVER
+)
+
+const (
+	lenValueCloseEConn uint16 = math.MaxUint16 - iota
+	lenValueCloseEConnImmediate
+	lenValueEConnStopRemote
+	lenValueEConnStartRemote
+)
+
 var bin binary.ByteOrder = binary.BigEndian
 
 func uint16ByteArray(u uint16) []byte {
@@ -59,18 +73,6 @@ func withLock(m *sync.Mutex, f func()) {
 	f()
 }
 
-type Position int
-
-const (
-	CLIENT Position = iota
-	SERVER
-)
-
-const (
-	lenValueCloseEConn uint16 = math.MaxUint16 - iota
-	lenValueCloseEConnImmediate
-)
-
 type dieCtl struct {
 	closed    bool
 	closeType string
@@ -112,7 +114,13 @@ func (dc *dieCtl) closeWithType(t string) {
 }
 
 type Config struct {
-	MaxPacketBodyLength   int
+	MaxPacketBodyLength int
+	EConnWriteConfig    struct {
+		WriteBufMaxLen               int
+		WriteBufStopRemoteThreshold  int
+		WriteBufStartRemoteThreshold int
+		OptimizationMode             bool
+	}
 	PConnAuthToken        string
 	PConnBindingAddresses []string
 	PConnKeepAlive        time.Duration
@@ -131,16 +139,42 @@ func NewConfigFromFile(filename string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	errorOccurred := false
 	if config.MaxPacketBodyLength == 0 || config.MaxPacketBodyLength >= 65501 {
-		return nil, errors.New("MaxPacketBodyLength can only be between 0 and 65501 (exclusive)")
+		log.Println("MaxPacketBodyLength can only be between 0 and 65501 (exclusive)")
+		errorOccurred = true
+	}
+	ecwc := config.EConnWriteConfig
+	if !(0 <= ecwc.WriteBufStartRemoteThreshold) {
+		log.Println("EConnWriteConfig.WriteBufStartRemoteThreshold cannot be negative")
+		errorOccurred = true
+	}
+	if !(ecwc.WriteBufStartRemoteThreshold <= ecwc.WriteBufStopRemoteThreshold) {
+		log.Println("EConnWriteConfig.WriteBufStopRemoteThreshold cannot be less than EConnWriteConfig.WriteBufStartRemoteThreshold")
+		errorOccurred = true
+	}
+	if !(ecwc.WriteBufStopRemoteThreshold <= ecwc.WriteBufMaxLen) {
+		log.Println("EConnWriteConfig.WriteBufMaxLen cannot be less than EConnWriteConfig.WriteBufStopRemoteThreshold")
+		errorOccurred = true
+	}
+	if ecwc.WriteBufMaxLen == 0 {
+		log.Println("EConnWriteConfig.WriteBufMaxLen cannot be 0")
+		errorOccurred = true
 	}
 	if config.PConnAuthToken == "" {
-		return nil, errors.New("PConnAuthToken cannot be empty; set it to a random value")
+		log.Println("PConnAuthToken cannot be empty; set it to a random value")
+		errorOccurred = true
 	}
 	if len(config.PConnBindingAddresses) == 0 {
-		return nil, errors.New("len(PConnBindingAddresses) == 0; check config file")
+		log.Println("len(PConnBindingAddresses) == 0; check config file")
+		errorOccurred = true
 	}
-	return &config, nil
+
+	if errorOccurred {
+		return nil, errors.New("one or more config value(s) is(are) illegal; see above")
+	} else {
+		return &config, nil
+	}
 }
 
 type Core struct {

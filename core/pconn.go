@@ -119,16 +119,19 @@ func (pc *pConn) start(position Position) {
 				switch bodyLen {
 				case lenValueCloseEConn:
 					go pc.pConnManager.core.eConnManager.onReceiveRemoteFinalization(id, seq, false)
-					continue
 				case lenValueCloseEConnImmediate:
 					go pc.pConnManager.core.eConnManager.onReceiveRemoteFinalization(id, seq, true)
-					continue
+				case lenValueEConnStopRemote:
+					fallthrough
+				case lenValueEConnStartRemote:
+					go pc.pConnManager.core.eConnManager.writeCtlPacket(id, seq, bodyLen, nil)
 				default:
 					log.Printf("received unknown special body length value for EConn (id: %d, seq: %d, bodyLen: %d); closing PConn", id, seq, bodyLen)
 					// TODO: Handle unknown values?
 					pc.close()
 					return
 				}
+				continue
 			}
 			b := make([]byte, bodyLen)
 			_, err = io.ReadFull(pc.conn, b)
@@ -196,7 +199,7 @@ func (pcm *pConnManager) putIdlePConn(pc *pConn) {
 	pcm.idlePConnsCond.Signal()
 }
 
-func (pcm *pConnManager) writeRaw(b []byte) {
+func (pcm *pConnManager) writeRaw0(b []byte) {
 	for {
 		pc := pcm.getIdlePConn()
 		if pc.dieCtl.isClosed() {
@@ -214,11 +217,19 @@ func (pcm *pConnManager) writeRaw(b []byte) {
 	}
 }
 
-func (pcm *pConnManager) write(id uint16, seq uint32, b []byte) {
+func (pcm *pConnManager) writeRaw(id uint16, seq uint32, lenValue uint16, body []byte) {
 	idBytes := uint16ByteArray(id)
 	seqBytes := uint32ByteArray(seq)
-	lenBytes := uint16ByteArray(uint16(len(b)))
-	pcm.writeRaw(concatByteSlices(idBytes, seqBytes, lenBytes, b))
+	lenBytes := uint16ByteArray(lenValue)
+	if body == nil {
+		pcm.writeRaw0(concatByteSlices(idBytes, seqBytes, lenBytes))
+	} else {
+		pcm.writeRaw0(concatByteSlices(idBytes, seqBytes, lenBytes, body))
+	}
+}
+
+func (pcm *pConnManager) write(id uint16, seq uint32, b []byte) {
+	pcm.writeRaw(id, seq, uint16(len(b)), b)
 }
 
 func (pcm *pConnManager) markAuthenticated(pc *pConn) {
@@ -263,15 +274,13 @@ func (pcm *pConnManager) dial(localIPString string) {
 
 // Notify the remote to finalize an EConn
 func (pcm *pConnManager) sendFinalizeEConn(id uint16, seq uint32, immediate bool) {
-	idBytes := uint16ByteArray(id)
-	seqBytes := uint32ByteArray(seq)
-	var lenBytes []byte
+	var lenValue uint16
 	if immediate {
-		lenBytes = uint16ByteArray(lenValueCloseEConnImmediate)
+		lenValue = lenValueCloseEConnImmediate
 	} else {
-		lenBytes = uint16ByteArray(lenValueCloseEConn)
+		lenValue = lenValueCloseEConn
 	}
-	pcm.writeRaw(concatByteSlices(idBytes, seqBytes, lenBytes))
+	pcm.writeRaw(id, seq, lenValue, nil)
 }
 
 func (pcm *pConnManager) start(position Position) {
