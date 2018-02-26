@@ -178,16 +178,18 @@ func NewConfigFromFile(filename string) (*Config, error) {
 }
 
 type Core struct {
-	position     Position
-	config       *Config
-	pConnManager *pConnManager
-	eConnManager *eConnManager
+	position         Position
+	swapECMPositions bool
+	config           *Config
+	pConnManager     *pConnManager
+	eConnManager     *eConnManager
 }
 
-func NewCore(position Position, config *Config) *Core {
+func NewCore(position Position, swapECMPositions bool, config *Config) *Core {
 	core := Core{
-		config:   config,
-		position: position,
+		config:           config,
+		position:         position,
+		swapECMPositions: swapECMPositions,
 	}
 	core.pConnManager = newPConnManager(&core)
 	core.eConnManager = newEConnManager(&core)
@@ -197,5 +199,9 @@ func NewCore(position Position, config *Config) *Core {
 
 func (core *Core) Start() {
 	core.pConnManager.start(core.position)
-	core.eConnManager.start(core.position)
+	ecmPosition := core.position
+	if core.swapECMPositions {
+		ecmPosition = map[Position]Position{CLIENT: SERVER, SERVER: CLIENT}[ecmPosition]
+	}
+	core.eConnManager.start(ecmPosition)
 }

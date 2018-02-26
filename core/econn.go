@@ -267,6 +267,7 @@ func (ec *eConn) onReceiveRemoteFinalization(finalSeq uint32, immediate bool) {
 
 type eConnManager struct {
 	core             *Core
+	ecmPosition      Position
 	listener         net.Listener
 	eConnIdMap       map[*eConn]uint16
 	idEConnMap       map[uint16]*eConn
@@ -323,7 +324,7 @@ func (ecm *eConnManager) write(id uint16, seq uint32, b []byte) {
 	ec, ok := ecm.idEConnMap[id]
 	ecm.eConnIdMapsMutex.Unlock()
 	if !ok {
-		switch ecm.core.position {
+		switch ecm.ecmPosition {
 		case CLIENT:
 			log.Printf("PCM attempted to write to a non-existing EConn (id: %d, seq: %d); rejecting", id, seq)
 			ecm.core.pConnManager.sendFinalizeEConn(id, 0, true)
@@ -410,6 +411,7 @@ func (ecm *eConnManager) removeEConn(ec *eConn) {
 func (ecm *eConnManager) start(position Position) {
 	config := ecm.core.config
 
+	ecm.ecmPosition = position
 	if position == CLIENT {
 		ln, err := net.Listen("tcp", config.EConnBindingAddr)
 		if err != nil {

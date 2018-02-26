@@ -13,10 +13,12 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 
 	var positionClient, positionServer bool
+	var swapECMPositions bool
 	var configFilename string
 
 	flag.BoolVar(&positionClient, "c", false, "start as client")
 	flag.BoolVar(&positionServer, "s", false, "start as server")
+	flag.BoolVar(&swapECMPositions, "S", false, "swap ECM positions (ECM on server side listens)")
 	flag.StringVar(&configFilename, "C", "", "json config file")
 
 	flag.Parse()
@@ -42,7 +44,7 @@ func main() {
 	}
 
 	dieChannel := make(chan bool)
-	c := core.NewCore(position, conf)
+	c := core.NewCore(position, swapECMPositions, conf)
 	c.Start()
 
 	<-dieChannel
