@@ -5,6 +5,9 @@ import (
 	"log"
 	"math/rand"
 	"neo181/core"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -43,10 +46,19 @@ func main() {
 		log.Fatalf("error parsing config file (%v)", err)
 	}
 
-	dieChannel := make(chan bool)
+	sighupChan := make(chan os.Signal, 2)
+	signal.Notify(sighupChan, syscall.SIGHUP, syscall.SIGINT)
+
 	c := core.NewCore(position, swapECMPositions, conf)
 	c.Start()
 
-	<-dieChannel
+	<-sighupChan
+	go func() {
+		<-sighupChan
+		os.Exit(1)
+	}()
+	log.Printf("stopping; press ctrl-c again to force stop")
+
+	c.Stop()
 
 }

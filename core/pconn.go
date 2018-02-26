@@ -157,10 +157,8 @@ func (pc *pConn) close() {
 	pc.dieCtl.close()
 	pc.conn.Close()
 	if pc.pConnManager.core.position == CLIENT {
-		if !pc.pConnManager.dieCtl.isClosed() {
-			localIPString := interface{}(pc.conn.LocalAddr()).(*net.TCPAddr).IP.String()
-			go pc.pConnManager.dial(localIPString)
-		}
+		localIPString := interface{}(pc.conn.LocalAddr()).(*net.TCPAddr).IP.String()
+		go pc.pConnManager.dial(localIPString)
 	}
 }
 
@@ -169,7 +167,6 @@ type pConnManager struct {
 	idlePConns      []*pConn
 	idlePConnsMutex sync.Mutex
 	idlePConnsCond  sync.Cond
-	dieCtl          dieCtl
 }
 
 func newPConnManager(core *Core) *pConnManager {
@@ -302,7 +299,6 @@ func (pcm *pConnManager) start(position Position) {
 			for {
 				conn, err := ln.AcceptTCP()
 				if err != nil {
-					// TODO: Handle shutdown?
 					log.Printf("error handling incoming PConn (%v)", err)
 				} else {
 					go func(conn net.Conn) {

@@ -272,9 +272,7 @@ type eConnManager struct {
 	eConnIdMap       map[*eConn]uint16
 	idEConnMap       map[uint16]*eConn
 	eConnIdMapsMutex sync.Mutex
-	closed           bool
-	connChannel      chan net.Conn
-	dieChannel       chan bool
+	dieCtl           dieCtl
 	idCtl            struct {
 		sync.Mutex
 		nextId uint16
@@ -283,11 +281,9 @@ type eConnManager struct {
 
 func newEConnManager(core *Core) *eConnManager {
 	ecm := eConnManager{
-		core:        core,
-		eConnIdMap:  make(map[*eConn]uint16),
-		idEConnMap:  make(map[uint16]*eConn),
-		connChannel: make(chan net.Conn),
-		dieChannel:  make(chan bool),
+		core:       core,
+		eConnIdMap: make(map[*eConn]uint16),
+		idEConnMap: make(map[uint16]*eConn),
 	}
 	nextId := uint16(rand.Uint32() >> 16)
 	if nextId == 0 {
@@ -424,30 +420,41 @@ func (ecm *eConnManager) start(position Position) {
 			for {
 				conn, err := ln.Accept()
 				if err != nil {
-					if ecm.closed {
+					if ecm.dieCtl.isClosed() {
 						return
 					}
 					log.Printf("error accepting EConn (%v)", err)
+					continue
 				}
-				ecm.connChannel <- conn
-			}
-		}()
-
-		go func() {
-			for {
-				select {
-				case conn := <-ecm.connChannel:
-					go func() {
-						eConn := ecm.createEConn(conn, 0)
-						eConn.start()
-						log.Printf("accepted EConn from %s (id: %d)", conn.RemoteAddr(), eConn.id)
-					}()
-				case <-ecm.dieChannel:
-					ecm.closed = true
-					ecm.listener.Close()
-					// TODO
-				}
+				go func() {
+					eConn := ecm.createEConn(conn, 0)
+					eConn.start()
+					log.Printf("accepted EConn from %s (id: %d)", conn.RemoteAddr(), eConn.id)
+				}()
 			}
 		}()
 	}
+}
+
+func (ecm *eConnManager) stop() {
+	withLock(&ecm.dieCtl.Mutex, func() {
+		if ecm.dieCtl.closed {
+			return
+		}
+
+		ecm.dieCtl.closed = true
+		ecm.listener.Close()
+
+		wg := sync.WaitGroup{}
+		for id := range ecm.idEConnMap {
+			id := id
+			wg.Add(1)
+			go func() {
+				log.Printf("instructing remote to finalize EConn %d", id)
+				ecm.core.pConnManager.sendFinalizeEConn(id, 0, true)
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+	})
 }

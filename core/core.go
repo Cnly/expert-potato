@@ -205,3 +205,7 @@ func (core *Core) Start() {
 	}
 	core.eConnManager.start(ecmPosition)
 }
+
+func (core *Core) Stop() {
+	core.eConnManager.stop()
+}
