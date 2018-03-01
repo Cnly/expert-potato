@@ -1,0 +1,19 @@
+{
+  "MaxPacketBodyLength": 4096,
+  "EConnWriteConfig": {
+    "WriteBufMaxLen": 8192,
+    "WriteBufStopRemoteThreshold": 16,
+    "WriteBufStartRemoteThreshold": 1,
+    "OptimizationMode": false
+  },
+  "PConnAuthToken": "",
+  "PConnBindingAddresses": [
+    "192.168.1.11",
+    "192.168.1.12",
+    "192.168.1.13"
+  ],
+  "PConnKeepAlive": 300000000000,
+  "EConnBindingAddr": "192.168.1.11:10181",
+  "ServerAddr": "12.34.56.78:10181",
+  "DestAddr": "12.34.56.78:1080"
+}
