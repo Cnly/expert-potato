@@ -1,19 +1,45 @@
 {
+  "//": "The max length allowed for packet body in the protocol between client and server.",
   "MaxPacketBodyLength": 4096,
+
+  "//": "Settings for EConns; default values should be fine in most cases",
   "EConnWriteConfig": {
+    "//": "EConn -> other app write buffer can at most hold this many packets.",
+    "//": "EConn will be finalized if buffer length is greater than this value.",
     "WriteBufMaxLen": 8192,
+
+    "//": "If an EConn -> other app write buffer's length is greater than this value, signal the remote to stop sending",
+    "//": "packets to this EConn.",
     "WriteBufStopRemoteThreshold": 16,
+
+    "//": "If an EConn -> other app write buffer's length drops below this value,",
+    "//": "signal the remote to start sending to this EConn.",
     "WriteBufStartRemoteThreshold": 1,
+
+    "//": "Whether to print out EConn -> other app write buffer's length, so as to make it easier",
+    "//": "for one to optimize the values above.",
     "OptimizationMode": false
   },
+
+  "//": "The token used to authenticate PConns. Client and server should share the same value.",
   "PConnAuthToken": "",
+
+  "//": "Binding addresses for PCM client. There will be one PCM client -> PCM server connection originated from each address.",
   "PConnBindingAddresses": [
     "192.168.1.11",
     "192.168.1.12",
     "192.168.1.13"
   ],
+
+  "//": "TCP Keep-alive interval for PConns. Unit: nanosecond. Set to 0 to disable.",
   "PConnKeepAlive": 300000000000,
+
+  "//": "The address ECM client should be listening on.",
   "EConnBindingAddr": "192.168.1.11:10181",
+
+  "//": "The address PCM server should be listening on, and PCM client should connect to.",
   "ServerAddr": "12.34.56.78:10181",
+
+  "//": "The address to which ECM server should forward data.",
   "DestAddr": "12.34.56.78:1080"
 }
