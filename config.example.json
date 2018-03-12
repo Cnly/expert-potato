@@ -25,11 +25,15 @@
   "PConnAuthToken": "",
 
   "//": "Binding addresses for PCM client. There will be one PCM client -> PCM server connection originated from each address.",
+  "//": "Format: IPAddress:Port. Set port to 0 for automatic allocation. For IPv6 addresses, use this format: [IPv6]:Port.",
   "PConnBindingAddresses": [
-    "192.168.1.11",
-    "192.168.1.12",
-    "192.168.1.13"
+    "192.168.1.11:0",
+    "192.168.1.12:0",
+    "192.168.1.13:0"
   ],
+
+  "//": "Whether to set SO_REUSEADDR and SO_REUSEPORT when dialing PConns.",
+  "PConnReusePort": false,
 
   "//": "TCP Keep-alive interval for PConns. Unit: nanosecond. Set to 0 to disable.",
   "PConnKeepAlive": 300000000000,
