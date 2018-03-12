@@ -123,6 +123,7 @@ type Config struct {
 	}
 	PConnAuthToken        string
 	PConnBindingAddresses []string
+	PConnReusePort        bool
 	PConnKeepAlive        time.Duration
 	EConnBindingAddr      string
 	ServerAddr            string

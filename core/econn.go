@@ -443,7 +443,9 @@ func (ecm *eConnManager) stop() {
 		}
 
 		ecm.dieCtl.closed = true
-		ecm.listener.Close()
+		if ecm.listener != nil {
+			ecm.listener.Close()
+		}
 
 		wg := sync.WaitGroup{}
 		for id := range ecm.idEConnMap {

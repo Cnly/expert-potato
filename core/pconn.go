@@ -8,9 +8,10 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/libp2p/go-reuseport"
 )
 
 // PConn: Parallel Connections, which are the connections shared between client and server
@@ -157,8 +158,8 @@ func (pc *pConn) close() {
 	pc.dieCtl.close()
 	pc.conn.Close()
 	if pc.pConnManager.core.position == CLIENT {
-		localIPString := interface{}(pc.conn.LocalAddr()).(*net.TCPAddr).IP.String()
-		go pc.pConnManager.dial(localIPString)
+		localAddrString := pc.conn.LocalAddr().String()
+		go pc.pConnManager.dial(localAddrString)
 	}
 }
 
@@ -241,25 +242,27 @@ func (pcm *pConnManager) createPConn(conn net.Conn) *pConn {
 	return &pConn
 }
 
-func (pcm *pConnManager) dial(localIPString string) {
-	if strings.ContainsRune(localIPString, ':') {
-		// IPv6
-		localIPString = "[" + localIPString + "]"
-	}
-	localAddr := mustResolveTCPAddr(localIPString + ":0")
-
-	dialer := net.Dialer{
-		LocalAddr: localAddr,
-		KeepAlive: pcm.core.config.PConnKeepAlive,
+func (pcm *pConnManager) dial(localAddrString string) {
+	dialer := reuseport.Dialer{
+		D: net.Dialer{
+			LocalAddr: mustResolveTCPAddr(localAddrString),
+			KeepAlive: pcm.core.config.PConnKeepAlive,
+		},
 	}
 
 	var interval time.Duration
 	for interval = 0; ; interval++ {
 		time.Sleep(interval * time.Second)
-		log.Printf("initiating PConn to server from local %s", localAddr)
-		conn, err := dialer.Dial("tcp", pcm.core.config.ServerAddr)
+		log.Printf("initiating PConn to server from local %s", localAddrString)
+		var conn net.Conn
+		var err error
+		if pcm.core.config.PConnReusePort {
+			conn, err = dialer.Dial("tcp", pcm.core.config.ServerAddr)
+		} else {
+			conn, err = dialer.D.Dial("tcp", pcm.core.config.ServerAddr)
+		}
 		if err != nil {
-			log.Printf("error establishing PConn with server; local: %s, error: %v", localAddr, err)
+			log.Printf("error establishing PConn with server; local: %s, error: %v", localAddrString, err)
 			continue
 		}
 		pc := pcm.createPConn(conn)
