@@ -304,7 +304,11 @@ func (pcm *pConnManager) start(position Position) {
 				if err != nil {
 					log.Printf("error handling incoming PConn (%v)", err)
 				} else {
-					go func(conn net.Conn) {
+					go func(conn *net.TCPConn) {
+						if config.PConnKeepAlive > 0 {
+							conn.SetKeepAlive(true)
+							conn.SetKeepAlivePeriod(config.PConnKeepAlive)
+						}
 						pc := pcm.createPConn(conn)
 						pc.start(SERVER)
 					}(conn)
