@@ -19,14 +19,26 @@ import (
 
 // TODO: Handle timeout
 
+func generateHeartBeatPacket() []byte {
+	idBytes := uint16ByteArray(0)
+	seqBytes := uint32ByteArray(0)
+	lenBytes := uint16ByteArray(lenValuePConnHeartbeat)
+	return concatByteSlices(idBytes, seqBytes, lenBytes)
+}
+
 type pConn struct {
 	pConnManager *pConnManager
 	conn         net.Conn
+	lastRecvTime int64
+	lastSendTime int64
+	heartbeatInterval int64
+	maxTimeout int64
 	dieCtl       dieCtl
 }
 
 func (pc *pConn) start(position Position) {
-	tokenBytes := []byte(pc.pConnManager.core.config.PConnAuthToken)
+	config := pc.pConnManager.core.config
+	tokenBytes := []byte(config.PConnAuthToken)
 
 	switch position {
 	case CLIENT:
@@ -115,6 +127,7 @@ func (pc *pConn) start(position Position) {
 				pc.close()
 				return
 			}
+			pc.lastRecvTime = time.Now().Unix()
 			id, seq, bodyLen := parseHeader(headerBuf)
 			if bodyLen >= 65501 {
 				switch bodyLen {
@@ -126,6 +139,10 @@ func (pc *pConn) start(position Position) {
 					fallthrough
 				case lenValueEConnStartRemote:
 					go pc.pConnManager.core.eConnManager.writeCtlPacket(id, seq, bodyLen, nil)
+				case lenValuePConnHeartbeat:
+					if time.Now().Unix() - pc.lastSendTime > pc.heartbeatInterval {
+						go func() { pc.write(generateHeartBeatPacket()) }()
+					}
 				default:
 					log.Printf("received unknown special body length value for EConn (id: %d, seq: %d, bodyLen: %d); closing PConn", id, seq, bodyLen)
 					// TODO: Handle unknown values?
@@ -141,13 +158,30 @@ func (pc *pConn) start(position Position) {
 				pc.close()
 				return
 			}
+			pc.lastRecvTime = time.Now().Unix()
 			go writeToECM(id, seq, b)
 		}
 	}()
+
+	if pc.heartbeatInterval > 0 {
+		go func() {
+			for !pc.dieCtl.isClosed() {
+				silentTime := time.Now().Unix() - pc.lastRecvTime
+				if silentTime > pc.maxTimeout {
+					log.Println("PConn timed out; closing PConn")
+					pc.close()
+				} else if silentTime >= pc.heartbeatInterval {
+					pc.write(generateHeartBeatPacket())
+				}
+				time.Sleep(1 * time.Second)
+			}
+		}()
+	}
 }
 
 func (pc *pConn) write(b []byte) (n int, err error) {
 	n, err = pc.conn.Write(b)
+	pc.lastSendTime = time.Now().Unix()
 	return n, err
 }
 
@@ -238,6 +272,10 @@ func (pcm *pConnManager) createPConn(conn net.Conn) *pConn {
 	pConn := pConn{
 		pConnManager: pcm,
 		conn:         conn,
+		lastRecvTime: time.Now().Unix(),
+		lastSendTime: time.Now().Unix(),
+		heartbeatInterval: int64(pcm.core.config.PConnHeartbeatInterval),
+		maxTimeout: int64(pcm.core.config.PConnHeartbeatInterval) + int64(pcm.core.config.PConnTimeout),
 	}
 	return &pConn
 }
@@ -246,7 +284,6 @@ func (pcm *pConnManager) dial(localAddrString string) {
 	dialer := reuseport.Dialer{
 		D: net.Dialer{
 			LocalAddr: mustResolveTCPAddr(localAddrString),
-			KeepAlive: pcm.core.config.PConnKeepAlive,
 		},
 	}
 
@@ -305,10 +342,6 @@ func (pcm *pConnManager) start(position Position) {
 					log.Printf("error handling incoming PConn (%v)", err)
 				} else {
 					go func(conn *net.TCPConn) {
-						if config.PConnKeepAlive > 0 {
-							conn.SetKeepAlive(true)
-							conn.SetKeepAlivePeriod(config.PConnKeepAlive)
-						}
 						pc := pcm.createPConn(conn)
 						pc.start(SERVER)
 					}(conn)

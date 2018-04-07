@@ -9,7 +9,6 @@ import (
 	"math"
 	"net"
 	"sync"
-	"time"
 )
 
 type Position int
@@ -24,6 +23,7 @@ const (
 	lenValueCloseEConnImmediate
 	lenValueEConnStopRemote
 	lenValueEConnStartRemote
+	lenValuePConnHeartbeat
 )
 
 var bin binary.ByteOrder = binary.BigEndian
@@ -121,13 +121,14 @@ type Config struct {
 		WriteBufStartRemoteThreshold int
 		OptimizationMode             bool
 	}
-	PConnAuthToken        string
-	PConnBindingAddresses []string
-	PConnReusePort        bool
-	PConnKeepAlive        time.Duration
-	EConnBindingAddr      string
-	ServerAddr            string
-	DestAddr              string
+	PConnAuthToken         string
+	PConnBindingAddresses  []string
+	PConnReusePort         bool
+	PConnHeartbeatInterval int
+	PConnTimeout           int
+	EConnBindingAddr       string
+	ServerAddr             string
+	DestAddr               string
 }
 
 func NewConfigFromFile(filename string) (*Config, error) {
@@ -168,6 +169,14 @@ func NewConfigFromFile(filename string) (*Config, error) {
 	}
 	if len(config.PConnBindingAddresses) == 0 {
 		log.Println("len(PConnBindingAddresses) == 0; check config file")
+		errorOccurred = true
+	}
+	if config.PConnHeartbeatInterval < 0 {
+		log.Println("PConnHeartbeatInterval cannot be negative")
+		errorOccurred = true
+	}
+	if config.PConnTimeout < 0 {
+		log.Println("PConnTimeout cannot be negative")
 		errorOccurred = true
 	}
 

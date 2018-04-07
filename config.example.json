@@ -35,8 +35,11 @@
   "//": "Whether to set SO_REUSEADDR and SO_REUSEPORT when dialing PConns.",
   "PConnReusePort": false,
 
-  "//": "TCP Keep-alive interval for PConns. Unit: nanosecond. Set to 0 to disable.",
-  "PConnKeepAlive": 300000000000,
+  "//": "Heartbeat interval for PConns. Unit: second. Set to 0 to disable.",
+  "PConnHeartbeatInterval": 10,
+
+  "//": "The time to wait for a heartbeat packet after PConnHeartbeatInterval. Unit: second.",
+  "PConnTimeout": 5,
 
   "//": "The address ECM client should be listening on.",
   "EConnBindingAddr": "192.168.1.11:10181",
